@@ -52,20 +52,26 @@ import json
 import sys
 
 if __name__ == '__main__':
-    if len(sys.argv) == 1 and 'PAYLOAD' not in environ:
-        print("Usage `python3 start.py <mission_payload_json>`")
-        print("or")
-        print("Export 'PAYLOAD={...}' and then issue `python3 start.py`")
-        exit(-1)
     if 'PAYLOAD' in environ:
-        json_payload = environ['PAYLOAD']    
+        json_payload = environ['PAYLOAD']
+    elif len(sys.argv) == 2:
+        try:
+            with open(sys.argv[1], 'r') as f:
+                json_payload = json.load(f)
+        except Exception as e:
+            print(f'Failed in reading json payload ({e})')
+            exit(JSON_READ_EC)
     else:
-        _, json_payload = sys.argv
+        print("Usage `python3 start.py <mission_payload_json>`")
+        exit(-1)
+
     headless = True if 'IN_DOCKER' in environ else False
+
     try:
-        start_with_payload(json.loads(json_payload), headless=headless)
+        start_with_payload(json_payload, headless=headless)
     except Exception as e:
         print(f'Failed in reading json payload ({e})')
         exit(JSON_READ_EC)
+
 
         
