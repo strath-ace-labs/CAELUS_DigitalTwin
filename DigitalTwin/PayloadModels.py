@@ -64,6 +64,7 @@ class ControllerPayload(Unpackable):
         self.drone_type: str = DRONE_TYPE_QUADROTOR if get(self.drone_config_full, 'type', default_if_not_found=DRONE_TYPE_QUADROTOR) == "QUADCOPTER" else DRONE_TYPE_FIXED_WING
         self.thermal_model_timestep: float = get(config_dict, 'thermal_model_timestep')
         self.weather_data_filepath: str = get(config_dict, 'weather_data_filepath', default_if_not_found=None)
+        self.connection_string: str = get(config_dict, 'connection_string', default_if_not_found='127.0.0.1:14550')
 
 class OrchestratorPayload(Unpackable):
     

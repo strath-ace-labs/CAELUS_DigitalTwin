@@ -1,7 +1,7 @@
 import logging
 import time
 from typing import Tuple
-from dronekit import Vehicle, Command, mavutil
+from pymavlink import mavutil
 
 class DroneCommander():
 
@@ -13,81 +13,45 @@ class DroneCommander():
 
     @staticmethod
     def commands_from_waypoints(waypoints: Tuple[float, float, float]):
-        return list(map(lambda wp: Command(0,0,0, mavutil.mavlink.MAV_FRAME_GLOBAL, mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 0, 1, 0, 20, 0, float('nan'), wp[1], wp[0], wp[2]), waypoints))
+        return list(map(lambda wp: (mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, wp[1], wp[0], wp[2]), waypoints))
 
     @staticmethod
     def mission_from_waypoints_vtol(waypoints: Tuple[float, float, float]):
         commands = DroneCommander.commands_from_waypoints(waypoints[1:-1]) # Last waypoint should be landing
-        commands.insert(0,Command(0,0,0, mavutil.mavlink.MAV_FRAME_GLOBAL, mavutil.mavlink.MAV_CMD_NAV_VTOL_TAKEOFF, 0, 1, 0, 0, 0, float('nan'), waypoints[0][1], waypoints[0][0], waypoints[0][2]))
-        commands.append(Command(0,0,0, mavutil.mavlink.MAV_FRAME_GLOBAL, mavutil.mavlink.MAV_CMD_NAV_VTOL_LAND, 0, 1, 0, 0, 0, float('nan'), waypoints[-1][1], waypoints[-1][0], waypoints[-1][2]))
+        commands.insert(0,(mavutil.mavlink.MAV_CMD_NAV_VTOL_TAKEOFF, waypoints[0][1], waypoints[0][0], waypoints[0][2]))
+        commands.append((mavutil.mavlink.MAV_CMD_NAV_VTOL_LAND, waypoints[-1][1], waypoints[-1][0], waypoints[-1][2]))
         return commands
 
     @staticmethod
     def mission_from_waypoints_quad(waypoints: Tuple[float, float, float]):
         commands = DroneCommander.commands_from_waypoints(waypoints[1:-1]) # Last waypoint should be landing
-        commands.insert(0,Command(0,0,0, mavutil.mavlink.MAV_FRAME_GLOBAL, mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, 0, 1, 0, 0, 0, float('nan'), waypoints[0][1], waypoints[0][0], waypoints[0][2]))
-        commands.append(Command(0,0,0, mavutil.mavlink.MAV_FRAME_GLOBAL, mavutil.mavlink.MAV_CMD_NAV_LAND, 0, 1, 0, 0, 0, float('nan'), waypoints[-1][1], waypoints[-1][0], waypoints[-1][2]))
+        commands.insert(0,(mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, waypoints[0][1], waypoints[0][0], waypoints[0][2]))
+        commands.append((mavutil.mavlink.MAV_CMD_NAV_LAND, waypoints[-1][1], waypoints[-1][0], waypoints[-1][2]))
         return commands
 
-
-    def set_roi(self, location):
-        # create the MAV_CMD_DO_SET_ROI command
-        msg = self.__vehicle.message_factory.command_long_encode(
-            0, 0,    # target system, target component
-            mavutil.mavlink.MAV_CMD_DO_SET_ROI, #command
-            0, #confirmation
-            0, 0, 0, 0, #params 1-4
-            *location
-            )
-        # send command to vehicle
-        self.__vehicle.send_mavlink(msg)
-
-    def __init__(self, drone_type: int):
+    def __init__(self, drone_type: int, connection_string: str):
         self.__drone_type = drone_type
-        self.__vehicle: Vehicle = None
         self.__logger = logging.getLogger(__name__)
-    
+        
+        if connection_string.startswith("mavlink://"):
+            connection_string = connection_string[len("mavlink://"):]
+        
+        self.__master = mavutil.mavlink_connection(connection_string)
+        self.connection_string = connection_string
+        self.__home_location = None
+        self.__mission_waypoints = None
+        self.__end_waypoint = None
+        self.__commands = []
+
+
     def __px4_set_mode(self, mav_mode):
-        self.__vehicle._master.mav.command_long_send(self.__vehicle._master.target_system, self.__vehicle._master.target_component,
-                                                mavutil.mavlink.MAV_CMD_DO_SET_MODE, 0,
-                                                mav_mode,
-                                                0, 0, 0, 0, 0, 0)
-
-    def __setup_vehicle(self):
-        pass
-
-    def __upload_vehicle_commands(self, commands):
-        self.__logger.info('Waiting for vehicle to be ready for upload')
-        self.__vehicle.wait_ready()
+        self.__master.mav.command_long_send(self.__master.target_system, self.__master.target_component,
+                                            mavutil.mavlink.MAV_CMD_DO_SET_MODE, 0,
+                                            mav_mode,
+                                            0, 0, 0, 0, 0, 0)
         
-        self.__logger.info('Uploading commands')
-        cmd_n = len(commands)
-        self.__vehicle._master.first_byte = True
-        for i,c in enumerate(commands):
-            c.seq = i+1
-            self.__vehicle._wploader.add(c)
-        
-        self.__vehicle._master.waypoint_clear_all_send()
-        self.__vehicle._master.waypoint_count_send(cmd_n)
-
-        for i in range(cmd_n):
-            while True:
-                try:
-                    msg = self.__vehicle._master.recv_match(type=['MISSION_REQUEST'],blocking=True) 
-                    self.__vehicle._master.mav.send(self.__vehicle._wploader.wp(msg.seq))
-                    break
-                except:
-                    pass
-            print(f"Uploaded mission item {i}")
-
-        self.__logger.info(f'Done uploading mission ({cmd_n} items)')
-        self.__vehicle._wp_uploaded = None
-        self.__vehicle._wpts_dirty = False
-        self.__vehicle.wait_ready()
-        
-
     def set_vehicle(self, vehicle):
-        self.__vehicle = vehicle
+        self.vehicle = vehicle
 
     def set_mission(self, waypoints):
         QUAD = 0
@@ -97,43 +61,52 @@ class DroneCommander():
         self.__logger.info('\n'+DroneCommander.waypoints_to_string(waypoints))
 
         if self.__drone_type == QUAD:
-            commands = DroneCommander.mission_from_waypoints_quad(waypoints)
+            self.__commands = DroneCommander.mission_from_waypoints_quad(waypoints)
         else:
-            commands = DroneCommander.mission_from_waypoints_vtol(waypoints)
-
-        self.__vehicle.commands.wait_ready()
-
-        # self.__vehicle.commands.clear()
-        # self.__vehicle.commands.upload()
-
-        for c in commands:
-            self.__vehicle.commands.add(c)
-        print(f'Uploading {len(commands)} commands...')
-        self.__vehicle.commands.upload(timeout=60)
-        print(f'Done uploading!')
-
-        # self.__upload_vehicle_commands(commands)
-        self.__vehicle.commands.wait_ready()
-
-        self.__logger.info('Waiting for vehicle commands acquisition')
+            self.__commands = DroneCommander.mission_from_waypoints_vtol(waypoints)
 
         self.__end_waypoint = waypoints[-1]
 
     def wait_for_home_lock(self):
-        while self.__vehicle.home_location is None:
-            time.sleep(0.5)
-
+        while self.__home_location is None:
+            msg = self.__master.recv_match(type=['HOME_POSITION'], blocking=True)
+            if msg is not None:
+                self.__home_location = (msg.latitude / 1e7, msg.longitude / 1e7, msg.altitude / 1e3)
+                print(f'Home location: {self.__home_location}')
+            else:
+                time.sleep(0.5)
     def __wait_for_vehicle_armable(self):
         self.__logger.info('Waiting for vehicle home lock')
         self.wait_for_home_lock()
-        print(f'Home location: {self.__vehicle.home_location}')
         self.__logger.info('Waiting for vehicle to be armable (CHECK SKIPPED!)')
         time.sleep(2)
 
-    def start_mission(self):
-        self.__wait_for_vehicle_armable()
-        self.__logger.info('Starting vehicle mission')
-        self.__px4_set_mode(DroneCommander.MAV_MODE_AUTO)
-        self.__vehicle.prepare_for_mission(len(self.__mission_waypoints))
-        self.__vehicle.armed = True
+def upload_mission(self):
+    self.__logger.info(f'Uploading {len(self.__commands)} commands...')
+    self.__master.waypoint_clear_all_send()
+    self.__master.waypoint_count_send(len(self.__commands))
 
+    for i, command in enumerate(self.__commands):
+        while True:
+            msg = self.__master.recv_match(type=['MISSION_REQUEST'], blocking=True)
+            if msg.seq == i:
+                self.__master.mav.mission_item_send(self.__master.target_system, self.__master.target_component,
+                                                    i, mavutil.mavlink.MAV_FRAME_GLOBAL,
+                                                    command[0], 0, 0, 0, 0, 0, float('nan'), command[1], command[2], command[3])
+                print(f"Uploaded mission item {i}")
+                break
+            else:
+                time.sleep(0.1)
+
+    self.__logger.info(f'Done uploading mission ({len(self.__commands)} items)')
+
+def start_mission(self):
+    self.__wait_for_vehicle_armable()
+    self.upload_mission()
+    self.__logger.info('Starting vehicle mission')
+    self.__px4_set_mode(DroneCommander.MAV_MODE_AUTO)
+
+    # Arm the vehicle
+    self.__master.mav.command_long_send(self.__master.target_system, self.__master.target_component,
+                                        mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM, 0,
+                                        1, 0, 0, 0, 0, 0, 0)

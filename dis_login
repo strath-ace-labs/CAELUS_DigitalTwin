@@ -1,0 +1,4 @@
+DIS_GRANT_TYPE=password
+DIS_CLIENT_ID=DMS
+DIS_USERNAME=admin@dis.test
+DIS_PASSWORD=Password2

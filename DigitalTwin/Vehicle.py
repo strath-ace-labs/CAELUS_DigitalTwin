@@ -1,11 +1,10 @@
 import logging
-from dronekit import Vehicle as DronekitVehicle
 from threading import Thread
 import time
 from PySmartSkies.DIS_API import DIS_API
 from PySmartSkies.CVMS_API import CVMS_API
 from PySmartSkies.Session import Session
-
+from pymavlink import mavutil
 from DigitalTwin.Interfaces.DBAdapter import DBAdapter
 from DigitalTwin.MissionProgressMonitor import MissionProgressMonitor
 
@@ -39,7 +38,7 @@ class SystemTime(object):
     """
     def __init__(self, time_unix_usec=None, time_boot_ms=None):
         self.time_unix_usec = time_unix_usec
-        self.time_boot_ms = time_boot_ms
+        self.time_boot_ms = time_boot_mself.__vehicle_addrs
         
     def __str__(self):
         """
@@ -86,48 +85,49 @@ class AttitudeQuaternion(object):
         """
         return f"ATTITUDE_QUATERNION: q1={self.q1}, q2={self.q2}, q3={self.q3}, q4={self.q4}"
 
-class Vehicle(DronekitVehicle):
-
-    def __init__(self, *args):
-        super().__init__(*args)
-        
+class Vehicle:
+    def __init__(self, connection_string):
+        self.master = mavutil.mavlink_connection(connection_string)
         self.__logger = logging.getLogger()
         self.__writer = None
         self.__latest_wp_reached = -1
+        self.listeners = {}
+    def add_attribute_listener(self, attribute, callback):
+        if attribute not in self.listeners:
+            self.listeners[attribute] = []
+        self.listeners[attribute].append(callback)
 
-        self._hil_actuator_controls = HilActuatorControls()
-        @self.on_message('HIL_ACTUATOR_CONTROLS')
-        def listener(self, name, message):
-            self._hil_actuator_controls.time_usec =message.time_usec
-            self._hil_actuator_controls.controls=message.controls
-            self._hil_actuator_controls.mode=message.mode
-            self._hil_actuator_controls.flags=message.flags
-            self.notify_attribute_listeners('hil_actuator_controls', self._hil_actuator_controls)         
+    def message_loop(self):
+            while True:
+                msg = self.master.recv_match(blocking=True)
+                if msg is not None:
+                    self.handle_message(msg)
 
-        self._system_time = SystemTime()
-        @self.on_message('SYSTEM_TIME')
-        def listener(self, name, message):
-            self._system_time.time_boot_ms=message.time_boot_ms
-            self._system_time.time_unix_usec=message.time_unix_usec
-            self.notify_attribute_listeners('system_time', self._system_time) 
+    def handle_message(self, msg):
+        if msg.get_type() == 'HIL_ACTUATOR_CONTROLS':
+            self._hil_actuator_controls.time_usec = msg.time_usec
+            self._hil_actuator_controls.controls = msg.controls
+            self._hil_actuator_controls.mode = msg.mode
+            self._hil_actuator_controls.flags = msg.flags
+            self.notify_attribute_listeners('hil_actuator_controls', self._hil_actuator_controls)
+            
+        elif msg.get_type() == 'SYSTEM_TIME':
+            self._system_time.time_boot_ms = msg.time_boot_ms
+            self._system_time.time_unix_usec = msg.time_unix_usec
+            self.notify_attribute_listeners('system_time', self._system_time)
 
-        self._attitude_speed = AttitudeSpeed()
-        @self.on_message('ATTITUDE')
-        def listener(self, name, message):
-            self._attitude_speed.rollspeed=message.rollspeed
-            self._attitude_speed.pitchspeed=message.pitchspeed
-            self._attitude_speed.yawspeed=message.yawspeed
-            self.notify_attribute_listeners('gyro', self._attitude_speed) 
-        
-        self._attitude_quaternion = AttitudeQuaternion()
-        @self.on_message('MISSION_ITEM_REACHED')
-        def listener(self, name, message):
-            self.__latest_wp_reached = message.seq
-            self.notify_attribute_listeners('mission_item_reached', self.__latest_wp_reached) 
+        elif msg.get_type() == 'ATTITUDE':
+            self._attitude_speed.rollspeed = msg.rollspeed
+            self._attitude_speed.pitchspeed = msg.pitchspeed
+            self._attitude_speed.yawspeed = msg.yawspeed
+            self.notify_attribute_listeners('gyro', self._attitude_speed)
 
-        @self.on_message('ATTITUDE_QUATERNION')
-        def listener(self, name, message):
-            self._attitude_quaternion = AttitudeQuaternion(q1=message.q1, q2=message.q2, q3=message.q3, q4=message.q4)
+        elif msg.get_type() == 'MISSION_ITEM_REACHED':
+            self.__latest_wp_reached = msg.seq
+            self.notify_attribute_listeners('mission_item_reached', self.__latest_wp_reached)
+
+        elif msg.get_type() == 'ATTITUDE_QUATERNION':
+            self._attitude_quaternion = AttitudeQuaternion(q1=msg.q1, q2=msg.q2, q3=msg.q3, q4=msg.q4)
             self.notify_attribute_listeners('attitude_quaternion', self._attitude_quaternion)
 
     def prepare_for_mission(self, mission_items_n):
@@ -146,6 +146,11 @@ class Vehicle(DronekitVehicle):
     def set_smartskies_auth_data(self, dis_token, dis_refresh_token, cvms_token, delivery_id):
         self.__smartskies_session = Session.with_tokens(dis_token, dis_refresh_token, cvms_token)
         self.__delivery_id = delivery_id
+
+    def start_message_loop(self):
+        self.message_thread = Thread(target=self.message_loop)
+        self.message_thread.start()
+    
 
     @property
     def hil_actuator_controls(self):

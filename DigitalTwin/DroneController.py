@@ -8,7 +8,7 @@ import os,signal
 import time
 from uuid import UUID
 from DigitalTwin.ExitHandler import ExitHandler
-
+from pymavlink import mavutil
 from DigitalTwin.Probes.RiskAssessment import RiskAssessment
 from DigitalTwin.WeatherDataProvider import WeatherDataProvider
 
@@ -45,7 +45,7 @@ class DroneController(VehicleManager, MissionManager, Stoppable):
     def __init__(self, controller_payload: ControllerPayload, weather_provider: WeatherDataProvider, writer: DBAdapter):
         self.__controller_payload = controller_payload
         self.__connection_manager = VehicleConnectionManager(self)
-        self.__commander = DroneCommander(controller_payload.drone_type)
+        self.__commander = DroneCommander(controller_payload.drone_type, controller_payload.connection_string)
         self.__state_aggregator = StateAggregator(controller_payload.drone_id if controller_payload is not None else "unknown_id", should_manage_vehicle=False)
         self.__logger = logging.getLogger(__name__)
         self.__state_aggregator_thread = None
@@ -54,6 +54,7 @@ class DroneController(VehicleManager, MissionManager, Stoppable):
         self.__writer = writer
         self.__weather_provider = weather_provider
         self.__initialise_probes()
+        
 
     def __initialise_probes(self):
         self.__anra_probe = AnraTelemetryPush()
@@ -125,7 +126,7 @@ class DroneController(VehicleManager, MissionManager, Stoppable):
     def vehicle_timeout(self, vehicle):
         self.__logger.info(f'Vehicle timed out!')
         self.__connection_manager.stop_connecting()
-        ExitHandler.shared().issue_exit_with_code_and_message(VEHICLE_TIMED_OUT, "Vehicle timed out.")
+        #ExitHandler.shared().issue_exit_with_code_and_message(VEHICLE_TIMED_OUT, "Vehicle timed out.")
 
     def add_mission(self, mission: Mission):
         self.__logger.info(f'Received new mission!')
