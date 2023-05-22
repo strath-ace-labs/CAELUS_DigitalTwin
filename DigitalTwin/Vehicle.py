@@ -38,7 +38,7 @@ class SystemTime(object):
     """
     def __init__(self, time_unix_usec=None, time_boot_ms=None):
         self.time_unix_usec = time_unix_usec
-        self.time_boot_ms = time_boot_mself.__vehicle_addrs
+        self.time_boot_ms = time_boot_ms
         
     def __str__(self):
         """
@@ -60,7 +60,10 @@ class AttitudeSpeed(object):
         
     def __str__(self):
         """
-        String representation used to print the RawIMU object. 
+        String representation usedsudo wget https://github.com/shiftkey/desktop/releases/download/release-3.1.1-linux1/GitHubDesktop-linux-3.1.1-linux1.deb
+### Uncomment below line if you have not installed gdebi-core before
+# sudo apt-get install gdebi-core 
+sudo gdebi GitHubDesktop-linux-3.1.1-linux1.deb to print the RawIMU object. 
         """
         return f"ATTITUDE: rollspeed={self.rollspeed}, pitchspeed={self.pitchspeed}, yawspeed={self.yawspeed}"
 
@@ -92,6 +95,9 @@ class Vehicle:
         self.__writer = None
         self.__latest_wp_reached = -1
         self.listeners = {}
+        self._hil_actuator_controls = None
+        self._system_time = SystemTime()
+        self._attitude_speed = AttitudeSpeed()
     def add_attribute_listener(self, attribute, callback):
         if attribute not in self.listeners:
             self.listeners[attribute] = []
@@ -105,12 +111,14 @@ class Vehicle:
 
     def handle_message(self, msg):
         if msg.get_type() == 'HIL_ACTUATOR_CONTROLS':
-            self._hil_actuator_controls.time_usec = msg.time_usec
-            self._hil_actuator_controls.controls = msg.controls
-            self._hil_actuator_controls.mode = msg.mode
-            self._hil_actuator_controls.flags = msg.flags
+            self._hil_actuator_controls = HilActuatorControls(
+                time_usec=msg.time_usec,
+                controls=msg.controls,
+                mode=msg.mode,
+                flags=msg.flags,
+        )
             self.notify_attribute_listeners('hil_actuator_controls', self._hil_actuator_controls)
-            
+      
         elif msg.get_type() == 'SYSTEM_TIME':
             self._system_time.time_boot_ms = msg.time_boot_ms
             self._system_time.time_unix_usec = msg.time_unix_usec
@@ -150,7 +158,13 @@ class Vehicle:
     def start_message_loop(self):
         self.message_thread = Thread(target=self.message_loop)
         self.message_thread.start()
-    
+
+    def notify_attribute_listeners(self, attribute, value):
+
+        if attribute in self.listeners:
+            for callback in self.listeners[attribute]:
+                callback(self, attribute, value)
+        
 
     @property
     def hil_actuator_controls(self):
@@ -158,4 +172,4 @@ class Vehicle:
 
     @property
     def system_time(self):
-        return self._system_time
+        return self._system_timecontrols, self._hil_actuator_controls
